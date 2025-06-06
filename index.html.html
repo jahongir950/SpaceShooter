@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Astro Blaster - CrazyGames</title>
+<style>
+    html, body {
+        margin: 0; padding: 0; overflow: hidden;
+        background: black;
+        font-family: Arial, sans-serif;
+        color: white;
+        text-align: center;
+        user-select: none;
+    }
+    #gameCanvas {
+        display: block;
+        margin: 0 auto;
+        background: radial-gradient(ellipse at center, #222 0%, #000 80%);
+        image-rendering: pixelated;
+    }
+    #menu, #game-over, #leaderboard {
+        position: absolute;
+        top: 15%;
+        width: 100%;
+        color: white;
+        text-align: center;
+        z-index: 10;
+    }
+    .hidden { display: none; }
+    button {
+        font-size: 18px;
+        margin: 10px;
+        padding: 12px 30px;
+        cursor: pointer;
+        border-radius: 6px;
+        border: none;
+        background-color: #0055ff;
+        color: white;
+        font-weight: bold;
+        transition: background-color 0.3s ease;
+    }
+    button:hover {
+        background-color: #003ecc;
+    }
+    ul {
+        list-style: none;
+        padding: 0;
+        max-height: 300px;
+        overflow-y: auto;
+        max-width: 300px;
+        margin: 20px auto;
+        text-align: left;
+    }
+    li {
+        padding: 4px 0;
+        border-bottom: 1px solid #333;
+    }
+    #ad-banner {
+        position: fixed;
+        bottom: 0;
+        width: 100%;
+        height: 50px;
+        background: #111;
+        color: #ccc;
+        line-height: 50px;
+        font-size: 14px;
+        user-select: none;
+        z-index: 15;
+    }
+</style>
+</head>
+<body>
+
+<div id="menu">
+    <h1>🚀 Astro Blaster</h1>
+    <button onclick="startGame()">Start Game</button>
+    <button onclick="showLeaderboard()">Leaderboard</button>
+</div>
+
+<canvas id="gameCanvas" width="400" height="600"></canvas>
+
+<div id="game-over" class="hidden">
+    <h2>Game Over</h2>
+    <p id="finalScore"></p>
+    <button onclick="restartGame()">Restart</button>
+    <button onclick="goToMenu()">Menu</button>
+</div>
+
+<div id="leaderboard" class="hidden">
+    <h2>Leaderboard (Top 100)</h2>
+    <ul id="leaderboardList"></ul>
+    <button onclick="goToMenu()">Back</button>
+</div>
+
+<div id="ad-banner">
+    <em>Advertisement Banner</em>
+</div>
+
+<!-- Multiple shoot sounds -->
+<audio id="shootSound1" src="https://freesound.org/data/previews/320/320655_5260879-lq.mp3" preload="auto"></audio>
+<audio id="shootSound2" src="https://freesound.org/data/previews/320/320657_5260879-lq.mp3" preload="auto"></audio>
+<audio id="shootSound3" src="https://freesound.org/data/previews/320/320659_5260879-lq.mp3" preload="auto"></audio>
+
+<script>
+// Canvas setup
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+const W = canvas.width;
+const H = canvas.height;
+
+// Game variables
+let score = 0;
+let bullets = [];
+let asteroids = [];
+let gameRunning = false;
+let keys = {};
+const rocket = { x: W / 2 - 16, y: H - 60, width: 32, height: 48 };
+
+// Timer to limit asteroid spawning for 30 seconds
+let startTime = 0;
+const asteroidDuration = 30000; // 30 seconds in ms
+
+// Stars pre-generated for stable twinkle effect
+const stars = [];
+for(let i=0; i<50; i++){
+    stars.push({x: Math.random()*W, y: Math.random()*H, alpha: Math.random()});
+}
+
+function updateStars(){
+    for(let i=0; i<stars.length; i++){
+        stars[i].alpha += (Math.random()*0.05 - 0.025);
+        if(stars[i].alpha < 0) stars[i].alpha = 0;
+        if(stars[i].alpha > 1) stars[i].alpha = 1;
+    }
+}
+
+// Draw functions
+function drawStars(){
+    ctx.clearRect(0, 0, W, H);
+    let bgGrad = ctx.createRadialGradient(W/2, H/2, 10, W/2, H/2, H);
+    bgGrad.addColorStop(0, "#111");
+    bgGrad.addColorStop(1, "#000");
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, W, H);
+
+    for(let i=0; i<50; i++) {
+        const star = stars[i];
+        ctx.fillStyle = `rgba(255,255,255,${star.alpha})`;
+        ctx.fillRect(star.x, star.y, 2, 2);
+    }
+}
+
+function drawRocket(x, y) {
+    let grad = ctx.createLinearGradient(x, y, x, y + rocket.height);
+    grad.addColorStop(0, "#00aaff");
+    grad.addColorStop(1, "#004466");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(x + rocket.width / 2, y);
+    ctx.lineTo(x + rocket.width, y + rocket.height);
+    ctx.lineTo(x, y + rocket.height);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#aaffff";
+    ctx.beginPath();
+    ctx.ellipse(x + rocket.width / 2, y + rocket.height / 2, 6, 9, 0, 0, 2 * Math.PI);
+    ctx.fill();
+}
+
+function drawAsteroid(x, y, size=32) {
+    ctx.fillStyle = "#888";
+    ctx.beginPath();
+    ctx.arc(x + size/2, y + size/2, size/2, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.fillStyle = "#666";
+    for(let i=0; i<5; i++){
+        let rx = x + Math.random() * size;
+        let ry = y + Math.random() * size;
+        let rsize = Math.random() * 6 + 2;
+        ctx.beginPath();
+        ctx.arc(rx, ry, rsize, 0, 2 * Math.PI);
+        ctx.fill();
+    }
+}
+
+function drawOrb(x, y) {
+    ctx.shadowColor = "cyan";
+    ctx.shadowBlur = 15;
+    ctx.fillStyle = "#0ff";
+    ctx.beginPath();
+    ctx.ellipse(x+4, y+8, 4, 8, 0, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+}
+
+// Controls
+window.addEventListener("keydown", e => {
+    keys[e.key] = true;
+});
+window.addEventListener("keyup", e => {
+    keys[e.key] = false;
+});
+
+let lastShotTime = 0;
+
+// Audio shoot sounds array and index for cycling
+const shootSounds = [
+    document.getElementById("shootSound1"),
+    document.getElementById("shootSound2"),
+    document.getElementById("shootSound3")
+];
+let currentShootSoundIndex = 0;
+
+// Function to play shoot sound sequentially, waiting until previous ends
+function playShootSound() {
+    const sound = shootSounds[currentShootSoundIndex];
+    if(!sound) return;
+    sound.pause();
+    sound.currentTime = 0;
+    sound.play();
+    currentShootSoundIndex = (currentShootSoundIndex + 1) % shootSounds.length;
+}
+
+// Game loop
+function gameLoop(timestamp){
+    if (!gameRunning) return;
+
+    drawStars();
+    updateStars();
+
+    // Move rocket
+    if(keys["ArrowLeft"] || keys["a"]){
+        rocket.x = Math.max(0, rocket.x - 7);
+    }
+    if(keys["ArrowRight"] || keys["d"]){
+        rocket.x = Math.min(W - rocket.width, rocket.x + 7);
+    }
+
+    // Shoot bullet
+    if(keys[" "] && (!lastShotTime || timestamp - lastShotTime > 300)){
+        bullets.push({x: rocket.x + rocket.width/2 - 4, y: rocket.y});
+        lastShotTime = timestamp;
+        playShootSound();
+    }
+
+    // Draw rocket
+    drawRocket(rocket.x, rocket.y);
+
+    // Update and draw bullets
+    for(let i = bullets.length -1; i >= 0; i--){
+        bullets[i].y -= 10;
+        drawOrb(bullets[i].x, bullets[i].y);
+        if(bullets[i].y < -10) bullets.splice(i,1);
+    }
+
+    // Update asteroids
+    if(timestamp - startTime < asteroidDuration) {
+        if(Math.random() < 0.02) {
+            let size = 32;
+            let x = Math.random() * (W - size);
+            asteroids.push({x, y: -size, size, speed: 2 + Math.random()*3});
+        }
+    }
+
+    for(let i = asteroids.length-1; i >= 0; i--){
+        asteroids[i].y += asteroids[i].speed;
+        drawAsteroid(asteroids[i].x, asteroids[i].y, asteroids[i].size);
+
+        // Check collision with bullets
+        for(let j = bullets.length-1; j >= 0; j--){
+            if(
+                bullets[j].x > asteroids[i].x &&
+                bullets[j].x < asteroids[i].x + asteroids[i].size &&
+                bullets[j].y > asteroids[i].y &&
+                bullets[j].y < asteroids[i].y + asteroids[i].size
+            ) {
+                score += 1;
+                asteroids.splice(i,1);
+                bullets.splice(j,1);
+                break;
+            }
+        }
+
+        // If asteroid hits bottom, game over
+        if(asteroids[i] && asteroids[i].y > H){
+            gameOver();
+            return;
+        }
+    }
+
+    // Draw score
+    ctx.fillStyle = "white";
+    ctx.font = "20px Arial";
+    ctx.fillText("Score: " + score, 10, 30);
+
+    // Check game duration
+    if(timestamp - startTime > asteroidDuration){
+        gameOver();
+        return;
+    }
+
+    requestAnimationFrame(gameLoop);
+}
+
+function startGame(){
+    document.getElementById("menu").classList.add("hidden");
+    document.getElementById("game-over").classList.add("hidden");
+    document.getElementById("leaderboard").classList.add("hidden");
+
+    score = 0;
+    bullets = [];
+    asteroids = [];
+    rocket.x = W/2 - rocket.width/2;
+    gameRunning = true;
+    startTime = performance.now();
+
+    requestAnimationFrame(gameLoop);
+}
+
+function gameOver(){
+    gameRunning = false;
+    document.getElementById("game-over").classList.remove("hidden");
+    document.getElementById("finalScore").textContent = "Your score: " + score;
+    saveScore(score);
+}
+
+function restartGame(){
+    startGame();
+}
+
+function goToMenu(){
+    document.getElementById("game-over").classList.add("hidden");
+    document.getElementById("leaderboard").classList.add("hidden");
+    document.getElementById("menu").classList.remove("hidden");
+}
+
+// Leaderboard - localStorage top 100 scores
+function saveScore(score){
+    if(score <= 0) return;
+    let scores = JSON.parse(localStorage.getItem("astroScores")) || [];
+    scores.push(score);
+    scores.sort((a,b) => b - a);
+    if(scores.length > 100) scores = scores.slice(0,100);
+    localStorage.setItem("astroScores", JSON.stringify(scores));
+}
+
+function showLeaderboard(){
+    document.getElementById("menu").classList.add("hidden");
+    document.getElementById("game-over").classList.add("hidden");
+    document.getElementById("leaderboard").classList.remove("hidden");
+    const list = document.getElementById("leaderboardList");
+    list.innerHTML = "";
+    let scores = JSON.parse(localStorage.getItem("astroScores")) || [];
+    if(scores.length === 0){
+        list.innerHTML = "<li>No scores yet</li>";
+        return;
+    }
+    scores.forEach((score,i) => {
+        list.innerHTML += `<li>${i+1}. ${score}</li>`;
+    });
+}
+</script>
+
+</body>
+</html>
